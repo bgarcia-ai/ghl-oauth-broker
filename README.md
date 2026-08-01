@@ -107,40 +107,125 @@ ghl auth admin revoke --id contractor
 
 ## Setup
 
-You need a GoHighLevel **Marketplace app** (agency-level, distribution type "Agency") and a Cloudflare account.
+Prerequisites: a **GoHighLevel agency account** with Marketplace developer access, a **Cloudflare account** (the free plan is enough), and Node 18+.
 
-1. **KV namespace**
-   ```bash
-   wrangler kv namespace create OAUTH
+The order below matters — the GHL app needs a redirect URI you don't know until the Worker is deployed, so you create the app first, deploy second, then wire them together.
+
+### Part A — create the GoHighLevel Marketplace app
+
+1. Go to the developer portal at **https://marketplace.gohighlevel.com/** and sign in with your agency account → **My Apps** → create a new app.
+
+2. **Distribution type: Agency.** This is what lets one authorization cover every sub-account. (A Sub-Account-only app can't mint location tokens and this broker won't work with it.)
+
+3. **Scopes — get these right now, changing them later means re-authorizing.** Two are mandatory:
+
+   | Scope | Why |
+   |---|---|
+   | `oauth.readonly` | enumerate installed sub-accounts (`/oauth/installedLocations`) |
+   | `oauth.write` | mint location tokens (`/oauth/locationToken`) |
+
+   Then add **every scope you want the minted location tokens to carry** — a location token inherits the app's scopes, so if you plan to read contacts you need `contacts.readonly` on the app itself. A typical automation set:
+
    ```
-   Put the returned id into `wrangler.toml`, and set `account_id` there (or export `CLOUDFLARE_ACCOUNT_ID`).
-
-2. **Secrets**
-   ```bash
-   wrangler secret put GHL_CLIENT_ID       # from your Marketplace app
-   wrangler secret put GHL_CLIENT_SECRET
-   wrangler secret put GHL_REDIRECT_URI    # https://<your-worker>.<subdomain>.workers.dev/oauth/callback
-   wrangler secret put GHL_OAUTH_SCOPES    # space-separated; the full set the app is configured for
-   wrangler secret put BROKER_KEY          # openssl rand -hex 32
-   wrangler secret put ALERT_WEBHOOK_URL   # optional — Slack/Discord webhook for re-auth alerts
-   ```
-   For local dev, copy `.dev.vars.example` → `.dev.vars` instead.
-
-3. **Marketplace app** — add `https://<your-worker>.<subdomain>.workers.dev/oauth/callback` to the app's Redirect URIs. It must match `GHL_REDIRECT_URI` exactly.
-
-4. **Deploy**
-   ```bash
-   npm install && npm run deploy
+   oauth.readonly oauth.write contacts.readonly contacts.write
+   conversations.readonly conversations.write conversations/message.readonly
+   conversations/message.write opportunities.readonly opportunities.write
+   calendars.readonly calendars.write calendars/events.readonly
+   calendars/events.write locations.readonly workflows.readonly users.readonly
    ```
 
-5. **Authorize once** — open `https://<your-worker>.<subdomain>.workers.dev/oauth/start`, pick the **agency** (bulk install across sub-accounts), Authorize. You should see "✅ Broker authorized".
+   Keep this exact space-separated string — it becomes the `GHL_OAUTH_SCOPES` secret in Part C, and it must match what the app is configured for.
 
-6. **Verify**
-   ```bash
-   curl -s -H "Authorization: Bearer $BROKER_KEY" \
-     https://<your-worker>.<subdomain>.workers.dev/health
+4. Copy the **Client ID** and **Client Secret**. The Client ID looks like `65f1c2d4e8a9b0c3d1e2f3a4-x7k2m9p1` — **paste it whole**, including the suffix. The broker derives the app's `version_id` from the part before the dash (`src/worker.ts:169`), so trimming it breaks the consent URL.
+
+5. Leave the Redirect URI for now — you'll add it in Part C.
+
+### Part B — deploy the Worker
+
+```bash
+git clone https://github.com/Bleupreneur/ghl-oauth-broker.git
+cd ghl-oauth-broker
+npm install
+npx wrangler login
+```
+
+Create the KV namespace and paste the returned id into `wrangler.toml` (replacing `<your-kv-namespace-id>`):
+
+```bash
+npx wrangler kv namespace create OAUTH
+```
+
+Also set `account_id` in `wrangler.toml`, or export it instead:
+
+```bash
+export CLOUDFLARE_ACCOUNT_ID=<your-cloudflare-account-id>   # Cloudflare dashboard → Workers & Pages → Account ID
+```
+
+Deploy. This prints your Worker URL — **note it, everything below uses it**:
+
+```bash
+npm run deploy
+# → https://ghl-oauth-broker.<your-subdomain>.workers.dev
+export BROKER_URL=https://ghl-oauth-broker.<your-subdomain>.workers.dev
+```
+
+Rename the worker by changing `name` in `wrangler.toml` before this step if you want a different hostname.
+
+### Part C — wire them together
+
+1. **Register the redirect URI.** Back in the Marketplace app, add exactly:
+
    ```
-   Expect `needsReauth:false` and `agencyTokenExpiresAt` in the future.
+   https://ghl-oauth-broker.<your-subdomain>.workers.dev/oauth/callback
+   ```
+
+   It must match the `GHL_REDIRECT_URI` secret character for character — a trailing slash will break the token exchange.
+
+2. **Set the secrets.** These apply immediately; no redeploy needed.
+
+   ```bash
+   npx wrangler secret put GHL_CLIENT_ID       # whole id, including the -suffix
+   npx wrangler secret put GHL_CLIENT_SECRET
+   npx wrangler secret put GHL_REDIRECT_URI    # $BROKER_URL/oauth/callback
+   npx wrangler secret put GHL_OAUTH_SCOPES    # the space-separated string from Part A step 3
+   npx wrangler secret put BROKER_KEY          # openssl rand -hex 32 — save this, it's your master key
+   npx wrangler secret put ALERT_WEBHOOK_URL   # optional — Slack/Discord webhook for re-auth alerts
+   ```
+
+   For local dev with `npm run dev`, copy `.dev.vars.example` → `.dev.vars` and fill it in instead.
+
+3. **Authorize once.** Open `$BROKER_URL/oauth/start` in a browser. On the GHL consent screen pick the **agency** (not an individual sub-account) so the app bulk-installs across sub-accounts, and tick "install on future sub-accounts" if offered so new clients are covered automatically. You should land on "✅ Broker authorized".
+
+4. **Verify.**
+
+   ```bash
+   export BROKER_KEY=<the key from step 2>
+   curl -s -H "Authorization: Bearer $BROKER_KEY" "$BROKER_URL/health"
+   ```
+
+   Expect `needsReauth:false`, `agencyTokenExpiresAt` in the future, and `knownLocations` matching your sub-account count (discovery runs in the background — give it a few seconds).
+
+5. **Mint your first token.**
+
+   ```bash
+   curl -s -X POST "$BROKER_URL/location-token" \
+     -H "Authorization: Bearer $BROKER_KEY" \
+     -H 'content-type: application/json' \
+     -d '{"locationId":"<a-locationId-from-/locations>"}'
+   ```
+
+   Use `curl -s -H "Authorization: Bearer $BROKER_KEY" "$BROKER_URL/locations"` to list them.
+
+### Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| Consent screen errors or won't load | `GHL_CLIENT_ID` was trimmed at the dash, or the app isn't Agency distribution |
+| `invalid_grant` / callback fails | `GHL_REDIRECT_URI` doesn't exactly match the URI registered on the app |
+| `502 ghl_error` on `/location-token` | app not approved/installed on that sub-account — re-install with future-locations, or approve it there |
+| `409 needs_reauth` | agency refresh token is dead — re-open `/oauth/start` |
+| Minted token 401s on a GHL endpoint | that scope wasn't on the app at authorize time — add it and re-authorize |
+| `knownLocations: 0` | discovery needs `oauth.readonly`; check the app's scopes, then `POST /admin/warm-all` |
 
 ### `/health` response shape
 
