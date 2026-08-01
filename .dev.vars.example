@@ -1,0 +1,18 @@
+# Local dev secrets for `wrangler dev`. Copy to `.dev.vars` (git-ignored) and fill in.
+# In production these are set with `wrangler secret put <NAME>` instead.
+
+# From your GoHighLevel Marketplace app
+GHL_CLIENT_ID=
+GHL_CLIENT_SECRET=
+
+# Must exactly match a Redirect URI registered on the Marketplace app
+GHL_REDIRECT_URI=http://localhost:8787/oauth/callback
+
+# Space-separated list of the scopes the Marketplace app is configured for
+GHL_OAUTH_SCOPES=
+
+# Bootstrap owner credential. Generate one: openssl rand -hex 32
+BROKER_KEY=
+
+# Optional: Slack/Discord incoming webhook that receives re-auth alerts
+ALERT_WEBHOOK_URL=

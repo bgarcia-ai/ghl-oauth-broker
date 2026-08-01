@@ -1,0 +1,17 @@
+name = "ghl-oauth-broker"
+main = "src/worker.ts"
+compatibility_date = "2025-10-01"
+workers_dev = true
+
+# Your Cloudflare account id. Either uncomment and set it here, or export
+# CLOUDFLARE_ACCOUNT_ID in your shell / CI and leave this commented out.
+# account_id = "<your-cloudflare-account-id>"
+
+# Created with: wrangler kv namespace create OAUTH
+[[kv_namespaces]]
+binding = "OAUTH"
+id = "<your-kv-namespace-id>"
+
+# Refresh the agency access token and re-warm sub-account tokens every 12h.
+[triggers]
+crons = ["0 */12 * * *"]

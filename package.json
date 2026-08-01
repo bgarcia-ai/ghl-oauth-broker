@@ -1,0 +1,31 @@
+{
+  "name": "ghl-oauth-broker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker that keeps a GoHighLevel Marketplace agency OAuth token alive and mints scoped, expiring, revocable sub-account tokens on demand.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Bleupreneur/ghl-oauth-broker.git"
+  },
+  "keywords": [
+    "gohighlevel",
+    "ghl",
+    "oauth",
+    "cloudflare-workers",
+    "token-broker"
+  ],
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260730.1",
+    "typescript": "^5.6.0",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.0.0"
+  }
+}
